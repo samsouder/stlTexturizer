@@ -135,6 +135,7 @@ const settings = {
   lockScale:     true,
   bottomAngleLimit: 5,
   topAngleLimit:    0,
+  heightMin: null, heightMax: null, // mm above the model bottom; null = no limit
   mappingBlend:     1,
   seamBandWidth:    0.5,
   textureSmoothing: 0,
@@ -303,6 +304,7 @@ let dispPreviewEdgeInfo  = null;   // { floorEdge, maxEdge, edge } of the latest
 // init already call cancelDisplacementPreviewBuild().
 let _previewWorkerAbort  = null;   // set while a worker build is in flight: kill + resolve(null)
 let _dispPreviewResolutionTimer = null;
+let _heightPreviewTimer = null;
 
 // 3D-preview mesh budget, in predicted first-subdivide triangles (see
 // choosePreviewEdge in previewPipeline.js).  That count drives the build time
@@ -411,6 +413,10 @@ const smartResBtn  = document.getElementById('smart-res-btn');
 const smartResInfo = document.getElementById('smart-res-info');
 const maxTriVal    = document.getElementById('max-triangles-val');
 
+const heightMinSlider = document.getElementById('height-min-slider');
+const heightMaxSlider = document.getElementById('height-max-slider');
+const heightMinInput = document.getElementById('height-min');
+const heightMaxInput = document.getElementById('height-max');
 const bottomAngleLimitSlider = document.getElementById('bottom-angle-limit');
 const topAngleLimitSlider    = document.getElementById('top-angle-limit');
 const bottomAngleLimitVal    = document.getElementById('bottom-angle-limit-val');
@@ -1728,6 +1734,49 @@ function wireEvents() {
   refineLenVal.addEventListener('change', markRefineLengthUserSet);
   refineLenVal.addEventListener('wheel', markRefineLengthUserSet);
   linkSlider(maxTriSlider, maxTriVal, v => { settings.maxTriangles = v; return formatM(v); }, false);
+  for (const [input, slider, key] of [
+    [heightMinInput, heightMinSlider, 'heightMin'],
+    [heightMaxInput, heightMaxSlider, 'heightMax'],
+  ]) {
+    slider.addEventListener('input', () => {
+      const height = currentBounds?.size.z ?? 0;
+      let value = Number(slider.value);
+      const other = key === 'heightMin' ? settings.heightMax : settings.heightMin;
+      // Each outer endpoint also clears its limit. This mirrors leaving the
+      // numeric field blank while keeping the full model in reach by dragging.
+      if ((key === 'heightMin' && value <= 0) || (key === 'heightMax' && value >= height)) {
+        value = null;
+      } else if (other !== null) {
+        const gap = Math.max(height / 10000, 1e-7);
+        if (key === 'heightMin' && value >= other) value = Math.max(0, other - gap);
+        if (key === 'heightMax' && value <= other) value = Math.min(height, other + gap);
+        if ((key === 'heightMin' && value >= other) || (key === 'heightMax' && value <= other)) {
+          syncHeightSliders();
+          return;
+        }
+      }
+      settings[key] = value === null ? null : Number(value.toPrecision(7));
+      input.value = settings[key] ?? '';
+      syncHeightSliders();
+      refreshHeightPreview();
+    });
+    input.addEventListener('change', () => {
+      const value = input.value === '' ? null : Number(input.value);
+      const other = key === 'heightMin' ? settings.heightMax : settings.heightMin;
+      const invalid = value !== null && (!Number.isFinite(value) || value < 0 ||
+        (other !== null && (key === 'heightMin' ? value >= other : value <= other)));
+      if (invalid) {
+        input.setCustomValidity(t('heightRange.invalid'));
+        input.reportValidity();
+        input.value = settings[key] ?? '';
+        input.setCustomValidity('');
+        return;
+      }
+      settings[key] = value;
+      syncHeightSliders();
+      refreshHeightPreview();
+    });
+  }
   linkSlider(bottomAngleLimitSlider, bottomAngleLimitVal, v => {
     settings.bottomAngleLimit = v; _falloffDirty = true;
     syncSmoothBottomToLimit();
@@ -2699,7 +2748,7 @@ function _materialiseActiveLayer() {
   const pausedBefore = _autoSavePaused;
   _autoSavePaused = true;
   try {
-    applySettingsSnapshot(L.settings);
+    applySettingsSnapshot(L.settings, { layerOnly: true });
     _applyLayerMap(L);
     // The layer's paint is already in the tree; only the mode changes.
     setSelectionMode(!!L.includeOnly, { clear: false });
@@ -3675,6 +3724,7 @@ function handlePlaceOnFaceClick(e) {
 
   // Now reload as if this were a freshly loaded STL
   currentBounds = computeBounds(currentGeometry);
+  syncHeightSliders();
   // Geometry rotated — cylinder axis settings tied to old XY are stale.
   settings.cylinderCenterX = null;
   settings.cylinderCenterY = null;
@@ -3879,6 +3929,7 @@ function _rotateFinalize() {
 
   // Full refresh
   currentBounds = computeBounds(currentGeometry);
+  syncHeightSliders();
   loadGeometry(currentGeometry);
 
   // Geometry was reauthored (displacement baked in); cylinder silhouette
@@ -4125,6 +4176,34 @@ function linkSlider(slider, valInput, onChangeFn, livePreview = true) {
   }
 }
 
+// Keep the slider domain tied to the model's current oriented height. Values
+// entered outside that domain remain in the number fields and project state.
+function syncHeightSliders() {
+  const height = currentBounds?.size.z;
+  const hasHeight = Number.isFinite(height) && height > 0;
+  for (const [slider, value, fallback] of [
+    [heightMinSlider, settings.heightMin, 0],
+    [heightMaxSlider, settings.heightMax, height],
+  ]) {
+    slider.disabled = !hasHeight;
+    slider.max = hasHeight ? String(height) : '1';
+    slider.value = hasHeight ? String(Math.max(0, Math.min(height, value ?? fallback))) : '0';
+  }
+}
+
+// The shader updates on every drag; rebuilding the cut 3D preview mesh is
+// debounced so a continuous drag does not start a worker for every pixel.
+function refreshHeightPreview() {
+  updatePreview();
+  clearTimeout(_heightPreviewTimer);
+  if (settings.useDisplacement) {
+    _heightPreviewTimer = setTimeout(() => {
+      _heightPreviewTimer = null;
+      if (settings.useDisplacement) toggleDisplacementPreview(true);
+    }, 250);
+  }
+}
+
 function formatM(n) {
   return n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)} M`
        : n >= 1_000    ? `${(n / 1_000).toFixed(0)} k`
@@ -4146,6 +4225,7 @@ function loadDefaultCube() {
 
   currentGeometry = geo;
   currentBounds   = computeBounds(geo);
+  syncHeightSliders();
   currentPoseRot   = new THREE.Quaternion(); // authored at the origin — nothing to restore
   currentPoseTrans = new THREE.Vector3();
   currentStlName  = 'cube_50x50x50';
@@ -4316,6 +4396,7 @@ async function handleModelFile(file, stepSettings = null) {
 
     currentGeometry = geometry;
     currentBounds   = bounds;
+    syncHeightSliders();
     currentPoseRot   = new THREE.Quaternion();
     currentPoseTrans = originOffset ? originOffset.clone().negate() : new THREE.Vector3(); // mem = orig − centre
     currentStlName  = file.name.replace(/\.(stl|obj|3mf|step|stp)$/i, '');
@@ -5256,6 +5337,8 @@ function _materialSettings(preview) {
     bounds: currentBounds,
     bottomAngleLimit: settings.bottomAngleLimit,
     topAngleLimit:    settings.topAngleLimit,
+    heightMin: settings.heightMin, heightMax: settings.heightMax,
+    heightFade: settings.refineLength,
     noDownwardZ:      settings.noDownwardZ,
     // The displaced mesh exists only once its async build finishes; until
     // then the base mesh keeps bump-only shading.
@@ -5396,6 +5479,8 @@ async function toggleDisplacementPreview(enable) {
       regularizeOpts: _regularizeOpts(),
       secondPassMul:  settings.regularizeSecondPassMul,
       excludedFaces:  _previewExcludedFaces(),
+      bounds: currentBounds,
+      heightSettings: { heightMin: settings.heightMin, heightMax: settings.heightMax, refineLength: settings.refineLength },
     }, () => dispPreviewToken !== myToken);
     if (!result || dispPreviewToken !== myToken) return;
 
@@ -5443,6 +5528,8 @@ async function toggleDisplacementPreview(enable) {
  * dropped, and terminate the worker so it stops burning CPU on it.
  */
 function cancelDisplacementPreviewBuild() {
+  clearTimeout(_heightPreviewTimer);
+  _heightPreviewTimer = null;
   dispPreviewToken++;
   if (_previewWorkerAbort) _previewWorkerAbort();
   dispPreviewSpinner.classList.add('hidden');
@@ -5481,6 +5568,11 @@ function scheduleDisplacementPreviewResolutionRefresh() {
     const info = dispPreviewEdgeInfo;
     if (!settings.useDisplacement || !info) return;
     const newFloor = settings.refineLength;
+    if ((settings.heightMin != null || settings.heightMax != null) && newFloor !== info.floorEdge) {
+      updatePreview();
+      toggleDisplacementPreview(true);
+      return;
+    }
     if (Math.min(newFloor, info.maxEdge) === Math.min(info.floorEdge, info.maxEdge)) return;
     // A finished build that the budget (not the resolution) limited only
     // changes if the new resolution is coarser than the edge it used.
@@ -6235,6 +6327,7 @@ function adoptBakedGeometry(geometry, bounds, opts = {}) {
 
   currentGeometry = geometry;
   currentBounds   = bounds;
+  syncHeightSliders();
   currentStlName  = `${currentStlName}_baked`;
   checkAmplitudeWarning();
 
@@ -6361,7 +6454,7 @@ const PERSISTED_KEYS = [
   'invertTexture',
   'symmetricDisplacement', 'noDownwardZ', 'smoothBottom', 'harvestFlatFaces', 'harvestTol', 'preserveUntextured', 'textureSmoothing',
   'mappingBlend', 'seamBandWidth', 'capAngle', 'boundaryFalloff', 'boundaryFalloffCurve',
-  'bottomAngleLimit', 'topAngleLimit',
+  'bottomAngleLimit', 'topAngleLimit', 'heightMin', 'heightMax',
   'refineLength', 'maxTriangles',
   // Cylindrical-mode controls. cylinderCenterX/Y/radius are nullable —
   // null means "fall back to AABB defaults", which is what fresh loads get.
@@ -6547,7 +6640,7 @@ function _migrateSnapshotScaleToMm(snap) {
  * same event it fires on user input (via dispatchEvent), so linkSlider's
  * clamp/display/preview flow runs unchanged.
  */
-function applySettingsSnapshot(snap) {
+function applySettingsSnapshot(snap, { layerOnly = false } = {}) {
   if (!snap) return;
   snap = _migrateSnapshotScaleToMm(snap);
 
@@ -6600,6 +6693,20 @@ function applySettingsSnapshot(snap) {
   // then-only linear ramp — fall back to 'linear' rather than keeping the
   // current UI choice, so loaded projects reproduce their original look.
   setFalloffCurve(snap.boundaryFalloffCurve ?? 'linear');
+  if (!layerOnly) {
+    // Old projects have no height restriction. Restore directly so a previous
+    // range does not constrain the two fields while a project is being loaded.
+    const previousHeightMin = settings.heightMin, previousHeightMax = settings.heightMax;
+    settings.heightMin = Number.isFinite(snap.heightMin) && snap.heightMin >= 0 ? snap.heightMin : null;
+    settings.heightMax = Number.isFinite(snap.heightMax) && snap.heightMax >= 0 ? snap.heightMax : null;
+    if (settings.heightMin !== null && settings.heightMax !== null && settings.heightMin >= settings.heightMax) {
+      settings.heightMin = settings.heightMax = null;
+    }
+    heightMinInput.value = settings.heightMin ?? '';
+    heightMaxInput.value = settings.heightMax ?? '';
+    syncHeightSliders();
+    if (settings.useDisplacement && (previousHeightMin !== settings.heightMin || previousHeightMax !== settings.heightMax)) toggleDisplacementPreview(true);
+  }
   setLinkedVal(bottomAngleLimitVal, snap.bottomAngleLimit);
   setLinkedVal(topAngleLimitVal,    snap.topAngleLimit);
   setLinkedVal(refineLenVal,        snap.refineLength);
@@ -6754,7 +6861,7 @@ const DEFAULT_SETTINGS_SNAPSHOT = Object.freeze({
   symmetricDisplacement: false, noDownwardZ: false, smoothBottom: true, harvestFlatFaces: true, harvestTol: 0.005, preserveUntextured: true, textureSmoothing: 0,
   mappingBlend: 1, seamBandWidth: 0.5, capAngle: 20, boundaryFalloff: 0,
   boundaryFalloffCurve: 'ease',
-  bottomAngleLimit: 5, topAngleLimit: 0,
+  bottomAngleLimit: 5, topAngleLimit: 0, heightMin: null, heightMax: null,
   refineLength: 1, maxTriangles: 750000,
   snapSeamlessWrap: true,
   cylinderCenterX: null, cylinderCenterY: null, cylinderRadius: null,

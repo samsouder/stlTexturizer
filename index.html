@@ -491,6 +491,20 @@
           <input type="number" class="val" id="top-angle-limit-val" value="0" min="0" max="90" step="1" />
         </div>
 
+        <h3 class="panel-subsection-heading" data-i18n="heightRange.heading">By Model Height</h3>
+        <p class="excl-hint" id="height-range-description" data-i18n="heightRange.description">Heights are in mm above the model's lowest point. Drag the sliders or enter values; clear a field or move its slider to the outer end for no limit. Other masks still apply.</p>
+        <div class="form-row slider-row">
+          <label for="height-min-slider" data-i18n="heightRange.min">Minimum height (mm)</label>
+          <input type="range" id="height-min-slider" min="0" max="50" step="any" value="0" aria-describedby="height-range-description" />
+          <input type="number" class="val" id="height-min" min="0" step="any" aria-label="Minimum height (mm)" data-i18n-aria-label="heightRange.min" />
+        </div>
+        <div class="form-row slider-row">
+          <label for="height-max-slider" data-i18n="heightRange.max">Maximum height (mm)</label>
+          <input type="range" id="height-max-slider" min="0" max="50" step="any" value="50" aria-describedby="height-range-description" />
+          <input type="number" class="val" id="height-max" min="0" step="any" aria-label="Maximum height (mm)" data-i18n-aria-label="heightRange.max" />
+        </div>
+        <p class="excl-hint" data-i18n="heightRange.fade">Texture fades at each interior limit over up to one output resolution.</p>
+
         <!-- By Surface -->
         <h3 class="panel-subsection-heading" id="excl-section-heading" data-i18n="sections.surfaceMasking" data-i18n-title="tooltips.surfaceMasking" title="Mask surfaces to control which areas receive displacement.">By Surface ⓘ</h3>
         <p id="excl-hint" class="excl-hint" style="display:none"></p>

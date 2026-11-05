@@ -59,6 +59,7 @@ See the **[full changelog](https://bumpmesh.com/changelog.html)** for every upda
 
 ### Surface Masking
 - **Angle masking** — suppress texture on near-horizontal top and/or bottom faces (0°–90° threshold each)
+- **Model height range** — use sliders or enter minimum and maximum heights in millimetres above the model's lowest point. Blank fields leave that side unrestricted. This global mask combines with angle and painted masks across all layers. Interior limits fade over up to one output-resolution distance to keep the mesh connected; the 3D preview and exported mesh are cut at the range boundaries.
 - **Surface painting** — paint surfaces to exclude (orange) or exclusively include them
   - Circle brush, **Precision** mode (default) — refines the mesh under the stroke itself (after PrusaSlicer's paint-on tool), so the stroke edge is as fine on a 12-triangle cube as on a scan; the base mesh is never modified
   - Circle brush, **Standard** mode — marks every whole triangle the brush touches (highlighted while hovering), so a quick smudge selects the flat faces of a CAD model

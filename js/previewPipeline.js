@@ -23,6 +23,7 @@ import { THREE } from './threeCompat.js';
 import { QuantizedPointMap } from './meshIndex.js';
 import { subdivide } from './subdivision.js';
 import { regularizeMesh } from './regularize.js';
+import { splitAtHeightLimits } from './heightRange.js';
 import { computeTriEdges, solveBudgetEdge } from './subdivisionEstimate.js';
 
 /**
@@ -98,6 +99,14 @@ export async function runPreviewPipeline(input, onEvent = () => {}, shouldAbort 
     activeGeo = resub;
   }
 
+  if (input.heightSettings && input.bounds) {
+    const cut = splitAtHeightLimits(activeGeo, activeParents, input.bounds, input.heightSettings);
+    if (cut.geometry !== activeGeo) {
+      activeGeo.dispose();
+      activeGeo = cut.geometry;
+      activeParents = cut.parents;
+    }
+  }
   onEvent('normals');
   const positions = activeGeo.attributes.position.array;
   const normals   = activeGeo.attributes.normal.array;

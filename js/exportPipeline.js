@@ -59,6 +59,7 @@ import { applyDisplacement, applyDisplacementLayers } from './displacement.js';
 import { decimate } from './decimation.js';
 import { resolveTJunctions, countEdgeDefects, countAreaSlivers } from './meshRepair.js';
 import { interpolateFromParents } from './softMask.js';
+import { splitAtHeightLimits } from './heightRange.js';
 
 const yieldFrame = () => new Promise(r => setTimeout(r, 0));
 
@@ -272,6 +273,13 @@ export async function runExportPipeline(input, onEvent = () => {}, shouldAbort =
     }
     if (shouldAbort()) return null;
 
+    const cut = splitAtHeightLimits(subdivided, faceParentId, bounds, settings);
+    if (cut.geometry !== subdivided) {
+      subdivided.dispose();
+      subdivided = cut.geometry;
+      faceParentId = cut.parents;
+    }
+
     if (input.softExclude) {
       subdivided.setAttribute('softExclude', new THREE.BufferAttribute(interpolateFromParents(
         subdivided.attributes.position.array, faceParentId, input.positions, input.softExclude
@@ -328,6 +336,21 @@ export async function runExportPipeline(input, onEvent = () => {}, shouldAbort =
         for (let t = 0; t < triN; t++) {
           if (ew.array[t * 3] > 0.99) lockedFaces[t] = 1;
         }
+      }
+    }
+
+    // Keep untouched triangles and the cut itself fixed through decimation,
+    // even when Preserve Untextured is off: otherwise a collapse can move the
+    // height boundary or introduce texture beyond it.
+    if (settings.heightMin != null || settings.heightMax != null) {
+      const pos = subdivided.attributes.position.array;
+      const triN = pos.length / 9;
+      if (!lockedFaces) lockedFaces = new Uint8Array(triN);
+      const lo = settings.heightMin == null ? -Infinity : bounds.min.z + settings.heightMin;
+      const hi = settings.heightMax == null ? Infinity : bounds.min.z + settings.heightMax;
+      for (let t = 0; t < triN; t++) {
+        const z0 = pos[t * 9 + 2], z1 = pos[t * 9 + 5], z2 = pos[t * 9 + 8];
+        if (Math.max(z0, z1, z2) <= lo || Math.min(z0, z1, z2) >= hi) lockedFaces[t] = 1;
       }
     }
 

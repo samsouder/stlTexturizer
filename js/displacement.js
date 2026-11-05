@@ -4,6 +4,7 @@
  */
 
 import { THREE } from './threeCompat.js';
+import { heightWeight } from './heightRange.js';
 import { computeUV, getDominantCubicAxis, getCubicBlendWeights, scaleMmToRelative, isStampActive, stampFrame, stampUV,
          isRotateAroundZ, rotateSideFrame } from './mapping.js';
 import { QuantizedPointMap } from './meshIndex.js';
@@ -140,7 +141,7 @@ export function applyDisplacementLayers(geometry, layers, settings, bounds, onPr
   // idPos{X,Y,Z} are only populated when boundary falloff is enabled, since
   // they're only consumed by the falloff distance field. Pre-sized to `count`
   // (upper bound on uniqueCount); read by ID, so extra tail slots stay unused.
-  const needIdPositions = layers.some(l => (l.settings.boundaryFalloff ?? 0) > 0);
+  const needIdPositions = settings.heightMin != null || settings.heightMax != null || layers.some(l => (l.settings.boundaryFalloff ?? 0) > 0);
   const _dedupMap = new QuantizedPointMap(QUANT, Math.min(count, 1 << 22));
   let _nextId = 0;
   const vertexId = new Uint32Array(count);
@@ -609,7 +610,8 @@ export function applyDisplacementLayers(geometry, layers, settings, bounds, onPr
       const mfTotal = maskedFracTotal[vid];
       const maskedFrac = mfTotal > 0 ? maskedFracMasked[vid] / mfTotal : 0;
       const centeredGrey = symmetric ? (grey - 0.5) : grey;
-      const falloffFactor = falloffArr ? falloffArr[vid] : 1.0;
+      const heightFactor = needIdPositions ? heightWeight(idPosZ[vid], bounds, settings) : 1;
+      const falloffFactor = (falloffArr ? falloffArr[vid] : 1.0) * heightFactor;
       let disp = pinned ? 0 : falloffFactor * (1 - maskedFrac) * centeredGrey * amplitude;
       if (softMax) disp *= 1 - softMax[vid];
       if (dispCacheCov) disp *= dispCacheCov[vid];
@@ -619,7 +621,7 @@ export function applyDisplacementLayers(geometry, layers, settings, bounds, onPr
         acc[vid] += disp;
       } else {
         // "Over": where this layer covers, the layers below fade out.
-        let cover = pinned ? 0 : (softMax ? 1 - softMax[vid] : 1);
+        let cover = pinned ? 0 : heightFactor * (softMax ? 1 - softMax[vid] : 1);
         if (dispCacheCov) cover *= dispCacheCov[vid];
         acc[vid] = acc[vid] * (1 - cover) + disp;
       }
@@ -645,7 +647,8 @@ export function applyDisplacementLayers(geometry, layers, settings, bounds, onPr
         if (!creases.active[s]) continue;
         const vid = creases.vidOf[s];
         const posPinned = isPinned(vid);
-        const falloffFactor = falloffArr ? falloffArr[vid] : 1.0;
+        const heightFactor = needIdPositions ? heightWeight(idPosZ[vid], bounds, settings) : 1;
+        const falloffFactor = (falloffArr ? falloffArr[vid] : 1.0) * heightFactor;
         for (let g = 0; g < creases.groups[s]; g++) {
           const k = creases.start[s] + g;
           const pinned = posPinned && (!perGroupPins || creases.excluded[k] === 1 || (hardGroup !== null && hardGroup[k] === 1));
@@ -661,7 +664,7 @@ export function applyDisplacementLayers(geometry, layers, settings, bounds, onPr
           } else if (blendAdd) {
             groupAcc[k] += disp;
           } else {
-            let cover = pinned ? 0 : (softMax ? 1 - softMax[vid] : 1);
+            let cover = pinned ? 0 : heightFactor * (softMax ? 1 - softMax[vid] : 1);
             if (groupCov) cover *= groupCov[k];
             groupAcc[k] = groupAcc[k] * (1 - cover) + disp;
           }

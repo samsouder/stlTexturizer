@@ -80,6 +80,8 @@ const sharedGLSL = /* glsl */`
   uniform vec3      boundsCenter;
   uniform float     bottomAngleLimit;
   uniform float     topAngleLimit;
+  uniform vec2      heightRange; // relative to boundsMin.z; negative = unrestricted
+  uniform float     heightFade;
   uniform int       noDownwardZ;
   uniform int       useDisplacement;
   uniform int       outlineWrapReady; // 1 = the mesh's outlineWrap attribute holds its places (outlineWrap.js)
@@ -88,6 +90,19 @@ const sharedGLSL = /* glsl */`
   // Outline wrap: the current vertex's share of its outline and its rise, set
   // by each shader's main() from the outlineWrap attribute (or its varying).
   vec2 owPlace;
+
+  float heightWeight(float z) {
+    float h = z - boundsMin.z;
+    if (heightRange.x >= 0.0 && h < heightRange.x) return 0.0;
+    if (heightRange.y >= 0.0 && h > heightRange.y) return 0.0;
+    float w = 1.0;
+    float fade = heightFade;
+    if (heightRange.x >= 0.0 && heightRange.y >= 0.0)
+      fade = max(1e-6, min(fade, (heightRange.y - heightRange.x) * 0.5));
+    if (heightRange.x > 0.0) w = min(w, clamp((h - heightRange.x) / fade, 0.0, 1.0));
+    if (heightRange.y >= 0.0 && heightRange.y < boundsSize.z) w = min(w, clamp((heightRange.y - h) / fade, 0.0, 1.0));
+    return w;
+  }
 
   const float PI     = 3.14159265358979;
   const float TWO_PI = 6.28318530717959;
@@ -478,7 +493,7 @@ const vertexShader = /* glsl */`
     vMaskType     = boundaryMaskTypeAttr;
 
     if (useDisplacement == 1) {
-      float h = compositeHeight(position, safeN, safeN, layerMask * layerFalloff * angleMask);
+      float h = compositeHeight(position, safeN, safeN, layerMask * layerFalloff * angleMask * heightWeight(position.z));
 
       // Displace along smooth normal so all copies of the same position
       // arrive at the same point (watertight, no cracks).
@@ -556,7 +571,7 @@ const fragmentShader = /* glsl */`
     vec3 PN   = length(_fN) > 1e-10 ? normalize(_fN) : vModelNormal;
 
     // Per-layer weights: user mask × boundary falloff × angle mask.
-    vec4 w = vLayerMask * vLayerFalloff * vAngleMask;
+    vec4 w = vLayerMask * vLayerFalloff * vAngleMask * heightWeight(vModelPos.z);
 
     // Per-fragment boundary falloff for bump-only mode, on the active layer.
     // On coarse meshes the vertex attribute cannot produce a gradient (too
@@ -793,6 +808,8 @@ export function updateMaterial(material, layers, settings) {
   u.boundsCenter.value.copy(b.center);
   u.bottomAngleLimit.value = settings.bottomAngleLimit ?? 5.0;
   u.topAngleLimit.value    = settings.topAngleLimit    ?? 0.0;
+  u.heightRange.value.set(settings.heightMin ?? -1, settings.heightMax ?? -1);
+  u.heightFade.value = Math.max(settings.heightFade ?? 1, 1e-6);
   u.noDownwardZ.value      = settings.noDownwardZ      ? 1 : 0;
   u.useDisplacement.value  = settings.useDisplacement  ? 1 : 0;
   u.outlineWrapReady.value = settings.outlineWrapReady ? 1 : 0;
@@ -843,6 +860,8 @@ function buildUniforms() {
     boundsCenter:     { value: new THREE.Vector3() },
     bottomAngleLimit: { value: 5.0 },
     topAngleLimit:    { value: 0.0 },
+    heightRange:      { value: new THREE.Vector2(-1, -1) },
+    heightFade:       { value: 1.0 },
     noDownwardZ:      { value: 0 },
     useDisplacement:  { value: 0 },
     outlineWrapReady: { value: 0 },
